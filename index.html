@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Chirk Clicker</title>
+  <style>
+    :root{--bg:#0f172a;--card:#0b1220;--accent:#7dd3fc;--muted:#94a3b8}
+    *{box-sizing:border-box}
+    html,body{height:100%;margin:0;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial}
+    body{background:linear-gradient(180deg,#071021 0%, #081428 100%);color:#e6eef6;display:flex;align-items:center;justify-content:center;padding:24px}
+    .container{width:940px;max-width:100%;display:grid;grid-template-columns:360px 1fr;gap:20px}
+
+    .card{background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));border:1px solid rgba(255,255,255,0.04);padding:18px;border-radius:12px;box-shadow:0 6px 18px rgba(3,7,18,0.6)}
+
+    .click-area{display:flex;flex-direction:column;align-items:center;gap:12px}
+    #chirkImg{width:280px;height:280px;object-fit:contain;cursor:pointer;user-select:none;border-radius:12px;border:2px solid rgba(255,255,255,0.03);transition:transform .12s ease}
+    #chirkImg:active{transform:scale(.97)}
+
+    .counter{font-size:20px;color:var(--accent);font-weight:700}
+    .muted{color:var(--muted);font-size:13px}
+
+    .upgrades{display:flex;flex-direction:column;gap:12px}
+    .upgrade{display:flex;align-items:center;justify-content:space-between;padding:12px;border-radius:10px;background:linear-gradient(180deg, rgba(255,255,255,0.01), transparent);border:1px solid rgba(255,255,255,0.02)}
+    .upgrade .left{display:flex;align-items:center;gap:12px}
+    .upgrade img{width:56px;height:56px;border-radius:8px;object-fit:cover}
+    .btn{background:var(--accent);color:#021022;padding:8px 12px;border-radius:8px;border:none;font-weight:700;cursor:pointer}
+    .btn[disabled]{opacity:.45;cursor:not-allowed}
+
+    header h1{margin:0;font-size:20px}
+    .small{font-size:13px}
+
+    footer{margin-top:16px;font-size:12px;color:var(--muted)}
+
+    /* responsive */
+    @media (max-width:720px){.container{grid-template-columns:1fr;}}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card click-area">
+      <header>
+        <h1>Chirk Clicker</h1>
+        <div class="small muted">Click the image to collect <strong>slimes</strong>.</div>
+      </header>
+
+      <img id="chirkImg" src="chirk.png" alt="Chirk (clickable)" draggable="false">
+      <div class="counter" id="slimeCount">0 slimes</div>
+      <div class="muted" id="rate">0 slimes / second</div>
+
+      <div style="display:flex;gap:8px;margin-top:6px;">
+        <button id="saveBtn" class="btn">Save</button>
+        <button id="resetBtn" class="btn" style="background:#334155;color:#e6eef6">Reset</button>
+      </div>
+
+      <footer>
+        <div class="muted">Audio: <code>chirp.mp3</code> — Image: <code>chirk.png</code>. Place them in the same folder as this HTML file.</div>
+      </footer>
+    </div>
+
+    <div class="card">
+      <h2 style="margin-top:0">Upgrades</h2>
+      <div class="upgrades" id="upgradesList">
+        <!-- upgrades injected by JS -->
+      </div>
+
+      <hr style="margin:12px 0;border:none;border-top:1px solid rgba(255,255,255,0.03)">
+      <div class="muted small">Notes: "Fetus in Latin" gives +1 automated click per second. "Cheese" gives +2 slimes per second. A third upgrade is included (Slime Core). Costs are configurable in the HTML file.</div>
+    </div>
+  </div>
+
+<script>
+// --- Configuration ---
+const CONFIG = {
+  clickValue: 1, // slimes per manual click
+  upgrades: [
+    { id: 'fetus-latin',  name: 'Fetus in Latin',  description: '+1 automated clicks/sec',   cost: 10,   effectType: 'cps', effectValue: 1 },
+    { id: 'cheese',       name: 'Cheese',          description: '+2 slimes/sec',             cost: 100,  effectType: 'sps', effectValue: 2 },
+    { id: 'slime-core',   name: 'Slime Core',      description: '+10 slimes/sec',            cost: 1000, effectType: 'sps', effectValue: 10 }
+  ],
+  saveKey: 'chirk_clicker_save_v1'
+};
+
+// --- State ---
+let state = {
+  slimes: 0,
+  owned: {}, // upgradeId -> count
+};
+CONFIG.upgrades.forEach(u => state.owned[u.id] = 0);
+
+// load audio
+const clickSound = new Audio('chirp.mp3');
+clickSound.preload = 'auto';
+clickSound.volume = 0.85;
+
+// DOM refs
+const slimesEl = document.getElementById('slimeCount');
+const rateEl = document.getElementById('rate');
+const chirkImg = document.getElementById('chirkImg');
+const upgradesList = document.getElementById('upgradesList');
+const saveBtn = document.getElementById('saveBtn');
+const resetBtn = document.getElementById('resetBtn');
+
+// utilities
+function format(n){return Math.floor(n).toLocaleString()}
+function updateUI(){
+  slimesEl.textContent = format(state.slimes) + (state.slimes === 1 ? ' slime' : ' slimes');
+  rateEl.textContent = `${computeRate().toFixed(1)} slimes / second`;
+  // update upgrade buttons
+  document.querySelectorAll('.upgrade').forEach(el => {
+    const id = el.dataset.id; const up = CONFIG.upgrades.find(u=>u.id===id);
+    const btn = el.querySelector('button');
+    btn.disabled = state.slimes < up.cost;
+    el.querySelector('.cost').textContent = `${format(up.cost)} slimes`;
+    el.querySelector('.owned').textContent = `Owned: ${state.owned[id]}`;
+  });
+}
+
+function computeRate(){
+  // sum effects from upgrades (treat cps and sps equivalently for resource per second)
+  let rate = 0;
+  for(const u of CONFIG.upgrades){
+    const count = state.owned[u.id]||0;
+    if(u.effectType === 'cps' || u.effectType === 'sps'){
+      rate += (u.effectValue * count);
+    }
+  }
+  return rate;
+}
+
+// click handler
+chirkImg.addEventListener('click', ()=>{
+  state.slimes += CONFIG.clickValue;
+  // play sound if available
+  playSound(clickSound);
+  animateClick();
+  updateUI();
+});
+
+function playSound(audio){
+  // attempt to play; catch promise rejection silently (browsers may block autoplay without gesture, but click is a gesture so should be fine)
+  if(!audio) return;
+  try{ audio.currentTime = 0; audio.play(); }catch(e){}
+}
+
+function animateClick(){
+  chirkImg.animate([{transform:'scale(1)'},{transform:'scale(.96)'}],{duration:120,fill:'forwards'});
+}
+
+// upgrades rendering
+function renderUpgrades(){
+  upgradesList.innerHTML = '';
+  for(const up of CONFIG.upgrades){
+    const el = document.createElement('div'); el.className = 'upgrade'; el.dataset.id = up.id;
+    el.innerHTML = `
+      <div class="left">
+        <img src="chirk.png" alt="${up.name}">
+        <div>
+          <div style="font-weight:700">${up.name}</div>
+          <div class="muted small">${up.description}</div>
+          <div class="muted small owned">Owned: 0</div>
+        </div>
+      </div>
+      <div style="text-align:right">
+        <div class="cost" style="font-weight:800">${up.cost} slimes</div>
+        <div style="height:8px"></div>
+        <button class="btn buy">Buy</button>
+      </div>
+    `;
+    upgradesList.appendChild(el);
+    el.querySelector('.buy').addEventListener('click', ()=>buyUpgrade(up.id));
+  }
+}
+
+function buyUpgrade(id){
+  const up = CONFIG.upgrades.find(u=>u.id===id); if(!up) return;
+  if(state.slimes < up.cost) return; // guard
+  state.slimes -= up.cost;
+  state.owned[id] = (state.owned[id]||0) + 1;
+  // optional: simple cost scaling (commented out). If you want scaling, uncomment below
+  // up.cost = Math.ceil(up.cost * 1.15);
+  updateUI();
+}
+
+// passive income tick
+setInterval(()=>{
+  const rate = computeRate();
+  state.slimes += rate;
+  updateUI();
+}, 1000);
+
+// save / load
+function saveGame(){
+  const payload = {state, timestamp: Date.now()};
+  try{ localStorage.setItem(CONFIG.saveKey, JSON.stringify(payload)); alert('Saved!'); }catch(e){alert('Save failed: ' + e.message)}
+}
+function loadGame(){
+  try{
+    const raw = localStorage.getItem(CONFIG.saveKey); if(!raw) return;
+    const payload = JSON.parse(raw);
+    if(payload && payload.state){
+      state = Object.assign(state, payload.state);
+      // ensure owned keys exist
+      CONFIG.upgrades.forEach(u => state.owned[u.id] = state.owned[u.id]||0);
+      updateUI();
+    }
+  }catch(e){console.warn('Failed to load save', e)}
+}
+
+saveBtn.addEventListener('click', saveGame);
+resetBtn.addEventListener('click', ()=>{
+  if(!confirm('Reset all progress?')) return;
+  state.slimes = 0; CONFIG.upgrades.forEach(u => state.owned[u.id] = 0); localStorage.removeItem(CONFIG.saveKey); updateUI();
+});
+
+// keyboard shortcut: space to click
+window.addEventListener('keydown', (e)=>{ if(e.code === 'Space'){ e.preventDefault(); chirkImg.click(); }});
+
+// initialize
+renderUpgrades(); loadGame(); updateUI();
+
+// expose for debugging (optional)
+window._chirk = {state, CONFIG, saveGame};
+</script>
+</body>
+</html>
